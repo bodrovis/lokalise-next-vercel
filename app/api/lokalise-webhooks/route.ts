@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { LokaliseDownload } from 'lokalise-file-exchange';
 import type { WebhookProjectTaskClosed } from '@lokalise/node-api';
+import { revalidatePath } from 'next/cache';
 import { LokaliseApi } from '@lokalise/node-api';
 import fs from 'fs/promises';
 import path from 'path';
@@ -88,6 +89,11 @@ export async function POST(req: NextRequest) {
 
       // d) upload them to Supabase
       await uploadFromTmpToSupabase();
+
+      for (const lang of langs) {
+        // invalidate the /[lang] page
+        revalidatePath(`/${lang}`);
+      }
 
       return NextResponse.json({ status: 'task processed' });
     } catch (err) {
