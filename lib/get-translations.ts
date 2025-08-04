@@ -27,14 +27,6 @@ export async function getTranslations<T extends Record<string, any>>(
   const lang = locale.trim().toLowerCase();
   const ns = namespace.trim().toLowerCase() || 'default';
 
-  // init locale map if needed
-  if (!cache.has(lang)) cache.set(lang, new Map());
-
-  const localeCache = cache.get(lang)!;
-  if (localeCache.has(ns)) {
-    return localeCache.get(ns) as T;
-  }
-
   const path = `locales/${lang}/${ns}.json`;
   let json: T = {} as T;
 
@@ -45,9 +37,6 @@ export async function getTranslations<T extends Record<string, any>>(
       .download(path);
 
     if (error) {
-      // Supabase StorageApiError often has no `status` prop, but
-      // error.cause (the underlying Response) *might* have a .status,
-      // and error.message usually contains "not found" on 404s.
       const causeStatus = (error as any).cause?.status;
       const msg = error.message?.toLowerCase() ?? '';
       const isNotFound = causeStatus === 404 || msg.includes('not found');
@@ -56,9 +45,7 @@ export async function getTranslations<T extends Record<string, any>>(
         console.error(`[get-translations] Error downloading ${path}:`, error);
       }
 
-      // cache empty object for missing or errored namespace
-      localeCache.set(ns, json);
-      return json;
+      return {} as T;
     }
 
     const text = await data.text();
@@ -66,12 +53,11 @@ export async function getTranslations<T extends Record<string, any>>(
       json = JSON.parse(text) as T;
     } catch (e) {
       console.error(`[get-translations] Invalid JSON in ${path}:`, e);
-      json = {} as T;
     }
   } catch (e) {
     console.error(`[get-translations] Unexpected error fetching ${path}:`, e);
   }
 
-  localeCache.set(ns, json);
   return json;
 }
+
