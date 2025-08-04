@@ -1,116 +1,198 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type {
-  DownloadFileParams,
-  WebhookProjectTaskClosed,
-} from "@lokalise/node-api";
-import type {
-  ExtractParams
-} from "lokalise-file-exchange";
-import {
-  LokaliseDownload
-} from "lokalise-file-exchange";
-import { LokaliseApi } from "@lokalise/node-api";
-import { readdir } from "fs/promises";
-import path from "path";
+import { LokaliseDownload } from 'lokalise-file-exchange';
+import type { WebhookProjectTaskClosed } from '@lokalise/node-api';
+import { LokaliseApi } from '@lokalise/node-api';
+import fs from 'fs/promises';
+import path from 'path';
+import { createClient } from '@supabase/supabase-js';
 
-const lokaliseProjectId = process.env.LOKALISE_PROJECT_ID!;
-const lokaliseWebhooksSecret = process.env.LOKALISE_WEBHOOK_SECRET!;
-const apiKey = process.env.LOKALISE_API_KEY!;
+//
+// ——————————————————————————————————————————————————————————
+//   1) ENV VAR VALIDATION
+// ——————————————————————————————————————————————————————————
+//
+const {
+  LOKALISE_PROJECT_ID,
+  LOKALISE_WEBHOOK_SECRET,
+  LOKALISE_API_KEY,
+  SUPABASE_URL,
+  SUPABASE_SERVICE_KEY,
+} = process.env;
 
+if (!LOKALISE_PROJECT_ID) {
+  throw new Error('Missing env var LOKALISE_PROJECT_ID');
+}
+if (!LOKALISE_WEBHOOK_SECRET) {
+  throw new Error('Missing env var LOKALISE_WEBHOOK_SECRET');
+}
+if (!LOKALISE_API_KEY) {
+  throw new Error('Missing env var LOKALISE_API_KEY');
+}
+if (!SUPABASE_URL) {
+  throw new Error('Missing env var NEXT_PUBLIC_SUPABASE_URL');
+}
+if (!SUPABASE_SERVICE_KEY) {
+  throw new Error('Missing env var SUPABASE_SERVICE_KEY');
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+const BUCKET = 'i18ndemo';
+
+//
+// ——————————————————————————————————————————————————————————
+//   2) WEBHOOK HANDLER
+// ——————————————————————————————————————————————————————————
+//
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const headers = req.headers;
-
-  if (headers.get('x-secret') !== lokaliseWebhooksSecret) {
-    return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 });
+  // 2.1 — Secret check
+  const receivedSecret = req.headers.get('x-secret');
+  if (receivedSecret !== LOKALISE_WEBHOOK_SECRET) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  // 2.2 — Parse body
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  // 2.3 — Ping
   if (Array.isArray(body) && body[0] === 'ping') {
-    return new Response(JSON.stringify({ status: 'success' }), { status: 200 });
+    return NextResponse.json({ status: 'success' });
   }
 
-  if (typeof body === 'object' && body !== null) {
-    const webhookPayload = body as WebhookProjectTaskClosed;
+  // 2.4 — project.task.closed
+  if (
+    typeof body === 'object' &&
+    body !== null &&
+    (body as any).event === 'project.task.closed' &&
+    (body as any).project?.id === LOKALISE_PROJECT_ID
+  ) {
+    const payload = body as WebhookProjectTaskClosed;
+    console.log(
+      `🟢 Task "${payload.task.title}" (${payload.task.id}) closed in "${payload.project.name}"`
+    );
 
-    if (
-      webhookPayload.event === 'project.task.closed' &&
-      webhookPayload.project.id === lokaliseProjectId
-    ) {
-      console.log(
-        `🟢 Task "${webhookPayload.task.title}" (ID ${webhookPayload.task.id}) closed ` +
-        `in project "${webhookPayload.project.name}".`
-      );
+    try {
+      // a) find target langs
+      const langs = await getTaskTargetLanguages(payload.task.id);
 
-      const langs = await getTaskTargetLanguages(webhookPayload.task.id);
+      // b) clear any old files
+      await clearTmpDir('/tmp/locales');
 
+      // c) download fresh JSONs
       await downloadFromLokalise(langs);
 
-      return new Response(JSON.stringify({ status: 'task processed' }), { status: 200 });
+      // d) upload them to Supabase
+      await uploadFromTmpToSupabase();
+
+      return NextResponse.json({ status: 'task processed' });
+    } catch (err) {
+      console.error('❌ Error processing task:', err);
+      return NextResponse.json({ error: 'Processing failed' }, { status: 500 });
     }
   }
 
-  return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 });
+  // 2.5 — fallback
+  return NextResponse.json({ error: 'Unhandled payload' }, { status: 400 });
 }
 
+//
+// ——————————————————————————————————————————————————————————
+//   3) HELPERS
+// ——————————————————————————————————————————————————————————
+//
+
+/** Calls Lokalise API to fetch the list of target languages for that task */
 async function getTaskTargetLanguages(taskId: number): Promise<string[]> {
-  const lokaliseApi = new LokaliseApi({ apiKey });
-  // Request full details for the task we just received in the webhook
-  const task = await lokaliseApi
-    .tasks()
-    .get(taskId, { project_id: lokaliseProjectId });
-  // Each element in task.languages has a language_iso field (e.g. "fr", "es")
-  return task.languages.map((lang) => lang.language_iso);
+  const api = new LokaliseApi({ apiKey: LOKALISE_API_KEY! });
+  const task = await api.tasks().get(taskId, {
+    project_id: LOKALISE_PROJECT_ID!,
+  });
+  return task.languages.map((l) => l.language_iso);
 }
 
+/** Recursively deletes & recreates the temp locales folder */
+async function clearTmpDir(dir: string) {
+  await fs.rm(dir, { recursive: true, force: true });
+  await fs.mkdir(dir, { recursive: true });
+}
+
+/** Downloads JSON files for each lang under /tmp/locales */
 async function downloadFromLokalise(downloadLangs: string[]) {
-  const downloadFileParams: DownloadFileParams = {
-    format: "json",            // Request JSON output
-    original_filenames: true,  // Keep the same filenames we uploaded (en.json, main.json, …)
-    indentation: "2sp",        // JSON with two-space indents
-    directory_prefix: "",      // No extra prefix inside the archive
-    filter_data: ["translated"],   // Export only segments with a translation
-    filter_langs: downloadLangs,   // Languages we got from getTaskTargetLanguages()
-  };
+  const downloader = new LokaliseDownload(
+    { apiKey: LOKALISE_API_KEY!, enableCompression: true },
+    { projectId: LOKALISE_PROJECT_ID! }
+  );
 
-  const extractParams: ExtractParams = {
-    outputDir: "/tmp",
-  };
+  console.log('📥 Downloading from Lokalise…', downloadLangs);
+  await downloader.downloadTranslations({
+    downloadFileParams: {
+      format: 'json',
+      original_filenames: true,
+      indentation: '2sp',
+      directory_prefix: '',
+      filter_data: ['translated'],
+      filter_langs: downloadLangs,
+    },
+    extractParams: { outputDir: '/tmp' },
+  });
 
-  try {
-    const lokaliseDownloader = new LokaliseDownload(
-      { apiKey, enableCompression: true },
-      { projectId: lokaliseProjectId }
-    );
+  console.log('✅ Download complete. Listing /tmp:');
+  await logDirRecursive('/tmp');
+}
 
-    console.log("Starting download…");
-    console.log("Languages:", downloadLangs.join(", "));
-
-    await lokaliseDownloader.downloadTranslations({
-      downloadFileParams,
-      extractParams,
-    });
-
-    console.log("Download completed successfully!");
-
-    console.log("Dumping /tmp:");
-    await logDirRecursive("/tmp");
-  } catch (error) {
-    console.error("Download failed:", error);
-    throw error;
+/** Recursively logs a directory tree to the console */
+async function logDirRecursive(dir: string, indent = ''): Promise<void> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const symbol = entry.isDirectory() ? '📁' : '📄';
+    console.log(`${indent}${symbol} ${entry.name}`);
+    if (entry.isDirectory()) {
+      await logDirRecursive(path.join(dir, entry.name), indent + '  ');
+    }
   }
 }
 
-async function logDirRecursive(dir: string, indent = ""): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true });
+/** Walks a directory tree and returns all file paths */
+async function walkDir(dir: string): Promise<string[]> {
+  const results: string[] = [];
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...(await walkDir(full)));
+    } else {
+      results.push(full);
+    }
+  }
+  return results;
+}
 
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    const isDir = entry.isDirectory();
-    const type = isDir ? "📁" : "📄";
-    console.log(`${indent}${type} ${entry.name}`);
+/** Uploads all files under /tmp/locales to Supabase, preserving folder structure */
+async function uploadFromTmpToSupabase() {
+  const files = await walkDir('/tmp/locales');
 
-    if (isDir) {
-      await logDirRecursive(fullPath, indent + "  ");
+  for (const filePath of files) {
+    const key = path
+      .relative('/tmp', filePath)
+      .replace(/\\/g, '/'); // e.g. "locales/fr/ui.json"
+    const content = await fs.readFile(filePath);
+
+    const { error } = await supabase.storage
+      .from(BUCKET)
+      .upload(key, content, {
+        contentType: 'application/json',
+        cacheControl: 'public, max-age=3600',
+        upsert: true,
+      });
+
+    if (error) {
+      console.error(`❌ Failed to upload ${key}:`, error.message);
+    } else {
+      console.log(`✅ Uploaded ${key}`);
     }
   }
 }
