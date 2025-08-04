@@ -1,74 +1,56 @@
+// app/api/upload-to-lokalise/route.ts
 import { NextResponse } from 'next/server';
-import { LokaliseUpload } from "lokalise-file-exchange";
-import path from "node:path";
+import { LokaliseUpload } from 'lokalise-file-exchange';
+import path from 'node:path';
 import type {
   CollectFileParams,
   PartialUploadFileParams,
   ProcessUploadFileParams,
-} from "lokalise-file-exchange";
-
-const baseTag = "api";
+} from 'lokalise-file-exchange';
 
 export async function POST() {
-  const apiKey = process.env.LOKALISE_API_KEY;
-  const projectId = process.env.LOKALISE_PROJECT_ID;
-  if (!apiKey || !projectId) {
-    return NextResponse.json(
-      { error: 'Missing Lokalise credentials' },
-      { status: 500 }
-    );
-  }
+  const apiKey = process.env.LOKALISE_API_KEY!;
+  const projectId = process.env.LOKALISE_PROJECT_ID!;
+  const baseTag = 'api';
 
-  try {
-    const lokaliseUploader = new LokaliseUpload(
-      { apiKey, enableCompression: true },
-      { projectId: projectId }
-    );
+  // 1) instantiate
+  const uploader = new LokaliseUpload(
+    { apiKey, enableCompression: true },
+    { projectId }
+  );
 
-    const tag = `${baseTag}-${new Date().toISOString().split("T")[0]}`;
+  // 2) tag by date
+  const tag = `${baseTag}-${new Date().toISOString().slice(0, 10)}`;
 
-    console.log("Ready to upload with tag:", tag);
+  // 3) params
+  const uploadFileParams: PartialUploadFileParams = {
+    replace_modified: true,
+    tags: [tag],
+  };
+  const collectFileParams: CollectFileParams = {
+    // ABSOLUTE path into your bundle
+    inputDirs: [path.resolve(process.cwd(), 'app', 'locales', 'en')],
+    extensions: ['.json'],
+    recursive: true,
+  };
+  const processUploadFileParams: ProcessUploadFileParams = {
+    pollStatuses: true,
+    // extract “en” from /.../locales/en/ui.json
+    languageInferer: (filePath) => path.basename(path.dirname(filePath)),
+    // strip off everything up to “app/locales/” and use forward‐slashes
+    filenameInferer: (filePath) => {
+      const rel = path
+        .relative(path.resolve(process.cwd(), 'app', 'locales'), filePath);
+      return rel.replace(/\\/g, '/'); // → "en/ui.json"
+    },
+  };
 
-    const uploadFileParams: PartialUploadFileParams = {
-      replace_modified: true,
-      tags: [tag],
-    };
+  // 4) run
+  const { processes, errors } = await uploader.uploadTranslations({
+    uploadFileParams,
+    collectFileParams,
+    processUploadFileParams,
+  });
 
-    const collectFileParams: CollectFileParams = {
-      inputDirs: ["./public/locales/en"],
-      extensions: [".json"],
-      recursive: true,
-    };
-
-    const processUploadFileParams: ProcessUploadFileParams = {
-      pollStatuses: true,
-      languageInferer: (filePath) => {
-        try {
-          const parentDir = path.dirname(filePath);
-          const baseName = path.basename(parentDir);
-          return baseName !== "locales" ? baseName : "";
-        } catch {
-          return "";
-        }
-      },
-      filenameInferer: (filePath) => {
-        const rel = path.relative(process.cwd(), filePath);
-        return rel.replace(/^public[\\/]/, '').replace(/\\/g, '/');
-      },
-    };
-
-    const { processes, errors } = await lokaliseUploader.uploadTranslations({
-      uploadFileParams,
-      collectFileParams,
-      processUploadFileParams,
-    });
-
-    return NextResponse.json({ tag, processes, errors });
-  } catch (err: any) {
-    console.error('[upload-to-lokalise] failed:', err);
-    return NextResponse.json(
-      { error: err.message || 'Unknown error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ tag, processes, errors });
 }
