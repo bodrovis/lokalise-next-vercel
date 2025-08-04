@@ -143,6 +143,7 @@ async function downloadFromLokalise(downloadLangs: string[]) {
       directory_prefix: '',
       filter_data: ['translated'],
       filter_langs: downloadLangs,
+      placeholder_format: 'icu',
     },
     extractParams: { outputDir: '/tmp' },
   });
