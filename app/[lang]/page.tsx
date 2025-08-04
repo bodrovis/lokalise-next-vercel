@@ -10,10 +10,6 @@ export async function generateStaticParams() {
   return getSupportedLangs().map((lang) => ({ lang }));
 }
 
-type Props = {
-  params: { lang: string };
-};
-
 export default async function LangPage(props: {
   params: Promise<{ lang: string }>
 }) {

@@ -1,17 +1,10 @@
 // app/[lang]/layout.tsx
 import { notFound } from 'next/navigation';
 import { Metadata } from 'next';
-import { ReactNode } from 'react';
-
 import { getTranslations } from '@/lib/get-translations';
 import { TranslationProvider } from '@/lib/translation-context';
 import { isLangSupported } from '@/lib/i18n-config';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
-
-type Props = {
-  children: ReactNode;
-  params: { lang: string };
-};
 
 export async function generateMetadata({
   params,
@@ -27,14 +20,14 @@ export async function generateMetadata({
     };
   }
 
-  const meta = await getTranslations<{ title?: string; description?: string }>(
+  const meta = await getTranslations<{ metaTitle?: string; metaDescription?: string }>(
     lang,
     'meta'
   );
 
   return {
-    title: meta.title ?? 'Default title',
-    description: meta.description ?? 'Default description',
+    title: meta.metaTitle ?? 'Default title',
+    description: meta.metaDescription ?? 'Default description',
   };
 }
 
