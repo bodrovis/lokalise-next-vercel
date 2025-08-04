@@ -11,6 +11,7 @@ import {
 } from "lokalise-file-exchange";
 import { LokaliseApi } from "@lokalise/node-api";
 import { readdir } from "fs/promises";
+import path from "path";
 
 const lokaliseProjectId = process.env.LOKALISE_PROJECT_ID!;
 const lokaliseWebhooksSecret = process.env.LOKALISE_WEBHOOK_SECRET!;
@@ -91,14 +92,25 @@ async function downloadFromLokalise(downloadLangs: string[]) {
 
     console.log("Download completed successfully!");
 
-    const contents = await readdir("/tmp", { withFileTypes: true });
-
-    for (const entry of contents) {
-      const type = entry.isDirectory() ? "📁" : "📄";
-      console.log(`${type} ${entry.name}`);
-    }
+    console.log("Dumping /tmp:");
+    await logDirRecursive("/tmp");
   } catch (error) {
     console.error("Download failed:", error);
-    throw error; // bubble up so the webhook route can decide how to respond
+    throw error;
+  }
+}
+
+async function logDirRecursive(dir: string, indent = ""): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    const isDir = entry.isDirectory();
+    const type = isDir ? "📁" : "📄";
+    console.log(`${indent}${type} ${entry.name}`);
+
+    if (isDir) {
+      await logDirRecursive(fullPath, indent + "  ");
+    }
   }
 }
