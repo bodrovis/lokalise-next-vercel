@@ -39,9 +39,13 @@ export async function POST() {
     languageInferer: (filePath) => path.basename(path.dirname(filePath)),
     // strip off everything up to “app/locales/” and use forward‐slashes
     filenameInferer: (filePath) => {
-      const rel = path
-        .relative(path.resolve(process.cwd(), 'app', 'locales'), filePath);
-      return rel.replace(/\\/g, '/'); // → "en/ui.json"
+      // 1) get “app/locales/en/ui.json”
+      const rel = path.relative(process.cwd(), filePath);
+      // 2) strip just “app/”
+      const withoutApp = rel.replace(/^app[\\/]/, '');
+      // 3) normalize Windows backslashes → forward slashes
+      return withoutApp.replace(/\\/g, '/');
+      // result: "locales/en/ui.json"
     },
   };
 
