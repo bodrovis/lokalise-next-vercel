@@ -15,7 +15,7 @@ const {
   LOKALISE_PROJECT_ID,
   LOKALISE_WEBHOOK_SECRET,
   LOKALISE_API_KEY,
-  SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_URL,
   SUPABASE_SERVICE_KEY,
 } = process.env;
 
@@ -28,14 +28,14 @@ if (!LOKALISE_WEBHOOK_SECRET) {
 if (!LOKALISE_API_KEY) {
   throw new Error('Missing env var LOKALISE_API_KEY');
 }
-if (!SUPABASE_URL) {
+if (!NEXT_PUBLIC_SUPABASE_URL) {
   throw new Error('Missing env var NEXT_PUBLIC_SUPABASE_URL');
 }
 if (!SUPABASE_SERVICE_KEY) {
   throw new Error('Missing env var SUPABASE_SERVICE_KEY');
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const supabase = createClient(NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 const BUCKET = 'i18ndemo';
 
